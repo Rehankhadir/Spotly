@@ -401,6 +401,8 @@ dialog:has(.spot-form) { overflow: hidden; }
   .collection-tools { grid-template-columns: 1fr; }
   .shell, .header-inner { width: calc(100% - 28px); }
   .header-actions { gap: 6px; }
+  .account-button { padding-inline: 9px; }
+  .account-button svg { display: none; }
   .header-actions:has(.account-button) .header-add { width: 43px; padding-inline: 0; }
   .header-actions:has(.account-button) .header-add span { display: none; }
   .card-grid, .journal-grid { grid-template-columns: 1fr; }

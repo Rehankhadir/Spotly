@@ -204,8 +204,9 @@ function renderHeader() {
     `${id === 'map' ? addTab : ''}<a href="#${id}" class="nav-link"${page === id ? ' aria-current="page"' : ''}><span class="nav-icon">${icon(graphic, 17)}</span><span>${label}</span></a>`
   ).join('');
   const accountLabel = cloudUser ? 'Your account' : 'Sign in';
+  const accountText = cloudUser ? 'Account' : 'Sign in';
   const accountButton = spotlyCloud.configured
-    ? `<button class="icon-btn account-button" data-action="account" aria-label="${accountLabel}" title="${accountLabel}" aria-haspopup="dialog"${cloudState === 'connecting' ? ' disabled' : ''}>${icon('user', 18)}</button>`
+    ? `<button class="btn btn-secondary account-button" data-action="account" aria-label="${accountLabel}" aria-haspopup="dialog"${cloudState === 'connecting' ? ' disabled' : ''}>${icon('user', 16)}<span>${accountText}</span></button>`
     : '';
   headerActions.innerHTML = `${themeButton()}${accountButton}<button class="btn btn-primary header-add" data-action="add" aria-label="Add a spot">${icon('plus', 17)} <span>Add a spot</span></button>`;
 }
@@ -536,7 +537,7 @@ async function connectCloud() {
   }
 }
 
-function accountDialog() {
+function accountDialog(forSpot = false) {
   const heading = `<span class="eyebrow">${icon('user', 16)} Spotly account</span>`;
   if (cloudState === 'connection-error') {
     showDialog(`${heading}<h2 id="dialog-title">Connection unavailable</h2>
@@ -546,7 +547,7 @@ function accountDialog() {
   }
   if (!cloudUser) {
     showDialog(`${heading}<h2 id="dialog-title">Sign in to Spotly</h2>
-      <p>Use an email link to open your saved spots and journal on any device.</p>
+      <p>${forSpot ? 'Sign in to save spots to your account. We’ll email you a link to get started.' : 'Use an email link to open your saved spots and journal on any device.'}</p>
       <form class="dialog-form" id="account-form">
         <label class="field">Email address<input name="email" type="email" autocomplete="email" required></label>
         <p class="form-message" id="account-status" role="status"></p>
@@ -1116,6 +1117,11 @@ async function onAction(event) {
       break;
     }
     case 'add':
+      if (spotlyCloud.configured && !cloudUser) {
+        if (cloudState === 'connecting') showToast('Spotly is connecting. Try again in a moment.');
+        else accountDialog(true);
+        break;
+      }
       if (cloudUser && cloudState !== 'ready') {
         showToast('Load your account before adding a spot.');
         break;
@@ -1183,6 +1189,10 @@ async function onAction(event) {
 }
 
 async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
+  if (spotlyCloud.configured && !cloudUser) {
+    form.querySelector('#spot-error').textContent = 'Sign in to save this spot to your account.';
+    return false;
+  }
   const existing = spots.find(spot => spot.id === form.dataset.id);
   let categoryId = data.category;
   let nextCategories = customCategories;
@@ -1218,6 +1228,7 @@ async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
   if (cloudUser) {
     const categoryRecord = nextCategories === customCategories ? null : nextCategories.at(-1);
     if (!await persistCloudRecord('spot', spot.id, spot, categoryRecord, form.querySelector('#spot-error'))) return false;
+    message = 'Spot saved to your account';
   } else {
     try {
       localStorage.setItem('spotly-spots', JSON.stringify({ spots: nextSpots, categories: nextCategories }));
@@ -1270,8 +1281,14 @@ async function onSubmit(event) {
     try {
       await spotlyCloud.signIn(data.email.trim());
       status.textContent = 'Check your email for a sign-in link.';
-    } catch {
-      status.textContent = 'Could not send a sign-in link. Check your email address and try again.';
+    } catch (error) {
+      if (error.code === 'email_address_not_authorized') {
+        status.textContent = 'This email cannot receive a sign-in link yet. Use an email address on the Supabase project team.';
+      } else if (error.code === 'over_email_send_rate_limit') {
+        status.textContent = 'Too many sign-in emails were requested. Wait a moment and try again.';
+      } else {
+        status.textContent = 'Could not send a sign-in link. Check your email address and try again.';
+      }
     } finally {
       button.disabled = false;
     }

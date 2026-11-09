@@ -1,6 +1,6 @@
 ﻿# Spotly
 
-Spotly is a personal travel atlas with a searchable Explore view, a saved-spots collection, an illustrated map, and a journal. Guest mode includes sample destinations and saves changes in the current browser. A connected Supabase account saves its atlas and journal across devices. Theme preferences stay in the current browser.
+Spotly is a personal travel atlas with a searchable Explore view, a saved-spots collection, an illustrated map, and a journal. Guest mode includes sample destinations. When Supabase is connected, sign in to add spots to your account and access them across devices. Theme preferences stay in the current browser.
 
 ## Run locally
 
