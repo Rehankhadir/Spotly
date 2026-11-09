@@ -177,8 +177,9 @@ function themeButton() {
 }
 
 function renderHeader() {
+  const addTab = `<button type="button" class="nav-link nav-add" data-action="add" aria-label="Add a spot" aria-haspopup="dialog"><span class="nav-icon">${icon('plus', 24)}</span><span>Add</span></button>`;
   navigation.innerHTML = Object.entries(pages).map(([id, [label, graphic]]) =>
-    `<a href="#${id}" class="nav-link"${page === id ? ' aria-current="page"' : ''}>${icon(graphic, 17)}${label}</a>`
+    `${id === 'map' ? addTab : ''}<a href="#${id}" class="nav-link"${page === id ? ' aria-current="page"' : ''}><span class="nav-icon">${icon(graphic, 17)}</span><span>${label}</span></a>`
   ).join('');
   headerActions.innerHTML = `${themeButton()}<button class="btn btn-primary" data-action="add">${icon('plus', 17)} Add a spot</button>`;
 }
