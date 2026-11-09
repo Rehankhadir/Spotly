@@ -864,7 +864,7 @@ function detail(spot) {
     ${shared ? '' : `<div class="dialog-form"><label class="field">Travel status<select id="detail-status-select" data-id="${esc(spot.id)}">${statusOptions(spot.status)}</select></label></div>`}
     <div class="detail-actions">${locationLink(spot)}${shared ? '' : favoriteButton(spot)}
       <button class="btn btn-secondary" data-action="entry" data-spot="${esc(spot.id)}">${icon('book', 17)} Write a note</button>
-      ${spot.custom || shared ? `<button class="btn btn-quiet" data-action="add" data-id="${esc(spot.id)}">${icon('pencil', 16)} Edit spot</button>` : ''}
+      ${spot.custom || shared || cloudUser ? `<button class="btn btn-quiet" data-action="add" data-id="${esc(spot.id)}">${icon('pencil', 16)} Edit spot</button>` : ''}
       ${sharingAvailable && !shared ? `<button class="btn btn-primary" data-action="share-spot" data-id="${esc(spot.id)}">${icon('share', 16)} Share spot</button>` : ''}
     </div>`);
 }
@@ -948,7 +948,15 @@ function spotForm(spot) {
     </div>
     <footer class="spot-form-footer">
       <p id="spot-error" class="form-message" role="alert"></p>
-      ${formActions('Save spot')}
+      <div id="spot-edit-actions">${formActions('Save spot', spot && !shared
+        ? '<button type="button" class="btn btn-quiet btn-danger" data-action="delete-spot" aria-controls="spot-delete-confirmation">Delete spot</button>' : '')}</div>
+      ${spot && !shared ? `<div id="spot-delete-confirmation" role="group" aria-labelledby="spot-delete-prompt" hidden>
+        <p id="spot-delete-prompt"><strong>Delete “${esc(spot.name)}”?</strong> This permanently removes the spot.${sharingAvailable ? ' Anyone it was shared with will lose access.' : ''}</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-quiet" data-action="keep-spot" aria-describedby="spot-delete-prompt">Keep spot</button>
+          <button type="button" class="btn btn-quiet btn-danger" data-action="confirm-delete-spot">Delete permanently</button>
+        </div>
+      </div>` : ''}
     </footer>
   </form>`);
   const form = dialog.querySelector('#spot-form');
@@ -1213,6 +1221,46 @@ async function updateSpot(spot, message) {
   return true;
 }
 
+function toggleSpotDeleteConfirmation(form, confirming) {
+  form.querySelector('#spot-edit-actions').hidden = confirming;
+  form.querySelector('#spot-delete-confirmation').hidden = !confirming;
+  form.querySelector('#spot-error').textContent = '';
+  form.querySelector(confirming ? '[data-action="keep-spot"]' : '[data-action="delete-spot"]').focus();
+}
+
+async function deleteSpot(button) {
+  const form = button.form;
+  const id = form.dataset.id;
+  if (button.disabled || !spots.some(spot => spot.id === id) || sharedSpots.has(id)) return;
+  if (spotlyCloud.configured && !cloudUser) return;
+
+  const status = form.querySelector('#spot-error');
+  const keep = form.querySelector('[data-action="keep-spot"]');
+  button.disabled = keep.disabled = true;
+  status.textContent = '';
+  try {
+    const remaining = spots.filter(spot => spot.id !== id);
+    if (cloudUser) {
+      if (!await persistCloudRecord('spot', id, null, null, status)) return;
+    } else {
+      try {
+        localStorage.setItem('spotly-spots', JSON.stringify({ spots: remaining, categories: customCategories }));
+      } catch {
+        status.textContent = 'Could not delete the spot. Enable browser storage and try again.';
+        return;
+      }
+    }
+    spots = remaining;
+    if (mapSelection === id) mapSelection = '';
+    if (!spots.some(spot => spot.category === category)) category = 'all';
+    renderPage();
+    if (button.isConnected && dialog.open) dialog.close();
+    showToast('Spot deleted');
+  } finally {
+    button.disabled = keep.disabled = false;
+  }
+}
+
 async function onAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
@@ -1376,6 +1424,15 @@ async function onAction(event) {
         break;
       }
       spotForm(spots.find(spot => spot.id === id));
+      break;
+    case 'delete-spot':
+      toggleSpotDeleteConfirmation(button.form, true);
+      break;
+    case 'keep-spot':
+      toggleSpotDeleteConfirmation(button.form, false);
+      break;
+    case 'confirm-delete-spot':
+      await deleteSpot(button);
       break;
     case 'capture-location':
       captureLocation(button);
@@ -1570,7 +1627,7 @@ async function onSubmit(event) {
   }
 
   if (form.id === 'spot-form') {
-    if (form.querySelector('[type="submit"]').disabled) return;
+    if (form.querySelector('[type="submit"]').disabled || form.querySelector('#spot-delete-confirmation:not([hidden])')) return;
     const foodItems = readSpotItems(form.querySelector('#food-field'));
     if (!foodItems) return;
     const stayPlaces = readSpotItems(form.querySelector('#stay-field'));
