@@ -848,6 +848,7 @@ function detail(spot) {
   const [label, graphic] = categories[spot.category];
   const photos = spot.photos ?? [];
   const shared = sharedSpots.has(spot.id);
+  const canDelete = canDeleteSpot(spot);
   showDialog(`<div class="detail-photo">${photo(spot, 'eager')}</div>
     ${photos.length > 1 ? `<div class="photo-gallery" role="group" aria-label="Spot photos">${photos.map((src, index) =>
       `<button type="button" class="photo-thumb" data-action="show-photo" data-id="${esc(spot.id)}" data-index="${index}" aria-pressed="${index === 0}" aria-label="Show photo ${index + 1}"><img src="${esc(src)}" alt=""></button>`
@@ -862,15 +863,37 @@ function detail(spot) {
     ${itemDetails('shopping', spot.shoppingItems)}
     <div class="card-meta" id="detail-status"${spot.status ? '' : ' hidden'}>${spot.status ? badge(spot.status) : ''}</div>
     ${shared ? '' : `<div class="dialog-form"><label class="field">Travel status<select id="detail-status-select" data-id="${esc(spot.id)}">${statusOptions(spot.status)}</select></label></div>`}
-    <div class="detail-actions">${locationLink(spot)}${shared ? '' : favoriteButton(spot)}
-      <button class="btn btn-secondary" data-action="entry" data-spot="${esc(spot.id)}">${icon('book', 17)} Write a note</button>
-      ${spot.custom || shared || cloudUser ? `<button class="btn btn-quiet" data-action="add" data-id="${esc(spot.id)}">${icon('pencil', 16)} Edit spot</button>` : ''}
-      ${sharingAvailable && !shared ? `<button class="btn btn-primary" data-action="share-spot" data-id="${esc(spot.id)}">${icon('share', 16)} Share spot</button>` : ''}
+    <div data-spot-delete="${esc(spot.id)}">
+      <div class="detail-actions" id="spot-actions">${locationLink(spot)}${shared ? '' : favoriteButton(spot)}
+        <button class="btn btn-secondary" data-action="entry" data-spot="${esc(spot.id)}">${icon('book', 17)} Write a note</button>
+        ${spot.custom || shared || cloudUser ? `<span class="spot-management-actions">
+          <button class="btn btn-quiet" data-action="add" data-id="${esc(spot.id)}">${icon('pencil', 16)} Edit spot</button>
+          ${canDelete ? spotDeleteButton : ''}
+        </span>` : ''}
+        ${sharingAvailable && !shared ? `<button class="btn btn-primary" data-action="share-spot" data-id="${esc(spot.id)}">${icon('share', 16)} Share spot</button>` : ''}
+      </div>
+      ${canDelete ? `<p id="spot-error" class="form-message" role="alert"></p>${spotDeleteConfirmation(spot)}` : ''}
     </div>`);
 }
 
 function formActions(label, extra = '') {
   return `<div class="dialog-actions">${extra}<button type="button" class="btn btn-quiet" data-action="close">Cancel</button><button type="submit" class="btn btn-primary">${label}</button></div>`;
+}
+
+const spotDeleteButton = '<button type="button" class="btn btn-quiet btn-danger" data-action="delete-spot" aria-controls="spot-delete-confirmation">Delete spot</button>';
+
+function canDeleteSpot(spot) {
+  return Boolean(spot && !sharedSpots.has(spot.id) && (cloudUser || (!spotlyCloud.configured && spot.custom)));
+}
+
+function spotDeleteConfirmation(spot) {
+  return `<div id="spot-delete-confirmation" role="group" aria-labelledby="spot-delete-prompt" hidden>
+    <p id="spot-delete-prompt"><strong>Delete “${esc(spot.name)}”?</strong> This permanently removes the spot.${sharingAvailable ? ' Anyone it was shared with will lose access.' : ''}</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-quiet" data-action="keep-spot" aria-describedby="spot-delete-prompt">Keep spot</button>
+      <button type="button" class="btn btn-quiet btn-danger" data-action="confirm-delete-spot">Delete permanently</button>
+    </div>
+  </div>`;
 }
 
 function spotItemRow(kind, { name = '', photo = '' } = {}) {
@@ -907,6 +930,7 @@ function spotItemsEditor(kind, items, enabled) {
 function spotForm(spot) {
   const selectedCategory = spot?.category ?? 'cafe';
   const shared = sharedSpots.has(spot?.id);
+  const canDelete = canDeleteSpot(spot);
   const editableCategories = { ...builtInCategories, ...Object.fromEntries(customCategories) };
   showDialog(`<form class="spot-form" id="spot-form" data-id="${esc(spot?.id)}">
     <header class="spot-form-header">
@@ -946,17 +970,10 @@ function spotForm(spot) {
       </div>
       <label class="field">Notes <textarea name="description" maxlength="750" placeholder="What makes this spot special?">${esc(spot?.description)}</textarea></label>
     </div>
-    <footer class="spot-form-footer">
+    <footer class="spot-form-footer" data-spot-delete="${esc(spot?.id)}">
       <p id="spot-error" class="form-message" role="alert"></p>
-      <div id="spot-edit-actions">${formActions('Save spot', spot && !shared
-        ? '<button type="button" class="btn btn-quiet btn-danger" data-action="delete-spot" aria-controls="spot-delete-confirmation">Delete spot</button>' : '')}</div>
-      ${spot && !shared ? `<div id="spot-delete-confirmation" role="group" aria-labelledby="spot-delete-prompt" hidden>
-        <p id="spot-delete-prompt"><strong>Delete “${esc(spot.name)}”?</strong> This permanently removes the spot.${sharingAvailable ? ' Anyone it was shared with will lose access.' : ''}</p>
-        <div class="dialog-actions">
-          <button type="button" class="btn btn-quiet" data-action="keep-spot" aria-describedby="spot-delete-prompt">Keep spot</button>
-          <button type="button" class="btn btn-quiet btn-danger" data-action="confirm-delete-spot">Delete permanently</button>
-        </div>
-      </div>` : ''}
+      <div id="spot-actions">${formActions('Save spot', canDelete ? spotDeleteButton : '')}</div>
+      ${canDelete ? spotDeleteConfirmation(spot) : ''}
     </footer>
   </form>`);
   const form = dialog.querySelector('#spot-form');
@@ -1221,21 +1238,21 @@ async function updateSpot(spot, message) {
   return true;
 }
 
-function toggleSpotDeleteConfirmation(form, confirming) {
-  form.querySelector('#spot-edit-actions').hidden = confirming;
-  form.querySelector('#spot-delete-confirmation').hidden = !confirming;
-  form.querySelector('#spot-error').textContent = '';
-  form.querySelector(confirming ? '[data-action="keep-spot"]' : '[data-action="delete-spot"]').focus();
+function toggleSpotDeleteConfirmation(button, confirming) {
+  const container = button.closest('[data-spot-delete]');
+  container.querySelector('#spot-actions').hidden = confirming;
+  container.querySelector('#spot-delete-confirmation').hidden = !confirming;
+  container.querySelector('#spot-error').textContent = '';
+  container.querySelector(confirming ? '[data-action="keep-spot"]' : '[data-action="delete-spot"]').focus();
 }
 
 async function deleteSpot(button) {
-  const form = button.form;
-  const id = form.dataset.id;
-  if (button.disabled || !spots.some(spot => spot.id === id) || sharedSpots.has(id)) return;
-  if (spotlyCloud.configured && !cloudUser) return;
+  const container = button.closest('[data-spot-delete]');
+  const id = container.dataset.spotDelete;
+  if (button.disabled || !canDeleteSpot(spots.find(spot => spot.id === id))) return;
 
-  const status = form.querySelector('#spot-error');
-  const keep = form.querySelector('[data-action="keep-spot"]');
+  const status = container.querySelector('#spot-error');
+  const keep = container.querySelector('[data-action="keep-spot"]');
   button.disabled = keep.disabled = true;
   status.textContent = '';
   try {
@@ -1426,10 +1443,10 @@ async function onAction(event) {
       spotForm(spots.find(spot => spot.id === id));
       break;
     case 'delete-spot':
-      toggleSpotDeleteConfirmation(button.form, true);
+      toggleSpotDeleteConfirmation(button, true);
       break;
     case 'keep-spot':
-      toggleSpotDeleteConfirmation(button.form, false);
+      toggleSpotDeleteConfirmation(button, false);
       break;
     case 'confirm-delete-spot':
       await deleteSpot(button);

@@ -308,6 +308,7 @@ dialog:has(.spot-form) { overflow: hidden; }
 .spot-form-footer .dialog-actions { margin-top: 0; }
 .dialog-inner .spot-form-footer #spot-error:not(:empty) { margin-bottom: 8px; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.spot-management-actions { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 .detail-actions .favorite-toggle[aria-pressed="true"] { background: var(--peach-soft); color: var(--peach-ink); }
 .invite-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--lavender-soft); }
 .invite-banner > div { flex: 1 1 190px; }
