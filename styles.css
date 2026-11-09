@@ -257,6 +257,11 @@ dialog::backdrop { background: #061e2cb5; backdrop-filter: blur(4px); }
 .dialog-inner p { color: var(--muted); margin-top: 10px; overflow-wrap: anywhere; }
 .detail-photo { aspect-ratio: 2; overflow: hidden; margin: -24px -24px 19px; background: var(--mist); }
 .dialog-form { display: grid; gap: 13px; margin-top: 17px; }
+.btn-google { min-height: 44px; gap: 10px; padding-inline: 12px; background: #fff; color: #1f1f1f; border-color: #747775; font-size: 14px; font-weight: 600; }
+.btn-google:hover:not(:disabled) { background: #f8faff; border-color: #1f1f1f; }
+.btn-google img { flex: none; }
+.sign-in-divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; }
+.sign-in-divider::before, .sign-in-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .field { display: grid; gap: 5px; min-width: 0; font-size: 13px; font-weight: 700; }
 .field input, .field select, .field textarea { min-width: 0; width: 100%; padding: 9px 11px; border: 1px solid var(--control-line); border-radius: 9px; background: var(--bg); color: var(--ink); font-size: 14px; font-weight: 400; }
 .field textarea { min-height: 88px; resize: vertical; }

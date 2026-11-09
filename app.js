@@ -169,6 +169,9 @@ let dialogOpener;
 let toastTimer;
 let cloudUser = null;
 let cloudState = spotlyCloud.configured ? 'connecting' : 'guest';
+const signInRetryDelay = 60_000;
+const signInRequest = { pending: false, retryAt: 0, message: '' };
+const googleSignIn = { pending: false, message: '' };
 let cloudGeneration = 0;
 let cloudWriting = false;
 let cloudRevisions = new Map();
@@ -493,7 +496,7 @@ function showDialog(markup) {
   }
   dialog.innerHTML = `<div class="dialog-inner"><button type="button" class="icon-btn" data-action="close" aria-label="Close dialog">${icon('x', 20)}</button>${markup}</div>`;
   if (!dialog.open) dialog.showModal();
-  (dialog.querySelector('input') || dialog.querySelector('[data-action="close"]')).focus();
+  (dialog.querySelector('[autofocus]') || dialog.querySelector('input') || dialog.querySelector('[data-action="close"]')).focus();
 }
 
 async function loadCloudAtlas() {
@@ -603,6 +606,37 @@ async function connectCloud() {
   }
 }
 
+function syncSignInForm() {
+  const form = dialog.querySelector('#account-form');
+  if (!form) return;
+  const status = form.querySelector('#account-status');
+  const button = form.querySelector('[type="submit"]');
+  const coolingDown = Date.now() < signInRequest.retryAt;
+  button.disabled = signInRequest.pending || coolingDown;
+  button.textContent = coolingDown ? 'Wait to resend' : 'Send sign-in link';
+  if (status.textContent !== signInRequest.message) status.textContent = signInRequest.message;
+  form.querySelector('[data-action="sign-in-google"]').disabled = googleSignIn.pending;
+  const googleStatus = form.querySelector('#google-sign-in-status');
+  if (googleStatus.textContent !== googleSignIn.message) googleStatus.textContent = googleSignIn.message;
+}
+
+async function startGoogleSignIn() {
+  if (googleSignIn.pending) return;
+  googleSignIn.pending = true;
+  googleSignIn.message = 'Opening Google…';
+  syncSignInForm();
+  try {
+    if (!await spotlyCloud.signInWithGoogle()) {
+      googleSignIn.message = 'Google sign-in requires setup. You can continue with an email link.';
+    }
+  } catch {
+    googleSignIn.message = 'Could not open Google. Try again or continue with an email link.';
+  } finally {
+    googleSignIn.pending = false;
+    syncSignInForm();
+  }
+}
+
 function accountDialog(forSpot = false) {
   const heading = `<span class="eyebrow">${icon('user', 16)} Spotly account</span>`;
   if (cloudState === 'connection-error') {
@@ -612,13 +646,22 @@ function accountDialog(forSpot = false) {
     return;
   }
   if (!cloudUser) {
+    if (!signInRequest.pending && Date.now() >= signInRequest.retryAt) signInRequest.message = '';
+    if (!googleSignIn.pending) googleSignIn.message = '';
     showDialog(`${heading}<h2 id="dialog-title">Sign in to Spotly</h2>
-      <p>${forSpot ? 'Sign in to save spots to your account. We’ll email you a link to get started.' : 'Use an email link to open your saved spots and journal on any device.'}</p>
+      <p>${forSpot ? 'Sign in to save spots to your account.' : 'Open your saved spots and journal on any device.'}</p>
       <form class="dialog-form" id="account-form">
+        <button type="button" class="btn btn-google" data-action="sign-in-google" autofocus>
+          <img src="https://developers.google.com/static/identity/images/g-logo.png" width="18" height="18" alt="" referrerpolicy="no-referrer">
+          Continue with Google
+        </button>
+        <p class="form-message" id="google-sign-in-status" role="status"></p>
+        <div class="sign-in-divider">or use email</div>
         <label class="field">Email address<input name="email" type="email" autocomplete="email" required></label>
         <p class="form-message" id="account-status" role="status"></p>
         ${formActions('Send sign-in link')}
       </form>`);
+    syncSignInForm();
     return;
   }
   const hasLocalData = read('spots', null) || read('entries', null);
@@ -1217,6 +1260,9 @@ async function onAction(event) {
     case 'account':
       accountDialog();
       break;
+    case 'sign-in-google':
+      await startGoogleSignIn();
+      break;
     case 'retry-cloud':
       if (dialog.open) dialog.close();
       if (cloudUser) await loadCloudAtlas();
@@ -1477,24 +1523,31 @@ async function onSubmit(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
   if (form.id === 'account-form') {
-    const status = form.querySelector('#account-status');
-    const button = form.querySelector('[type="submit"]');
-    if (button.disabled) return;
-    button.disabled = true;
-    status.textContent = 'Sending sign-in link…';
+    if (signInRequest.pending || Date.now() < signInRequest.retryAt) return;
+    signInRequest.pending = true;
+    signInRequest.message = 'Sending sign-in link…';
+    syncSignInForm();
+    let pauseResends = false;
     try {
       await spotlyCloud.signIn(data.email.trim());
-      status.textContent = 'Check your email for a sign-in link.';
+      signInRequest.message = 'Check your inbox and spam folder for your sign-in link.';
+      pauseResends = true;
     } catch (error) {
       if (error.code === 'email_address_not_authorized') {
-        status.textContent = 'This email cannot receive a sign-in link yet. Use an email address on the Supabase project team.';
-      } else if (error.code === 'over_email_send_rate_limit') {
-        status.textContent = 'Too many sign-in emails were requested. Wait a moment and try again.';
+        signInRequest.message = 'This email cannot receive a sign-in link yet. Use an email address on the Supabase project team.';
+      } else if (error.status === 429 || ['over_email_send_rate_limit', 'over_request_rate_limit'].includes(error.code)) {
+        signInRequest.message = 'Sign-in links are temporarily limited. If one has already arrived, open it. Otherwise, try again later.';
+        pauseResends = true;
       } else {
-        status.textContent = 'Could not send a sign-in link. Check your email address and try again.';
+        signInRequest.message = 'Could not send a sign-in link. Check your email address and try again.';
       }
     } finally {
-      button.disabled = false;
+      signInRequest.pending = false;
+      if (pauseResends) {
+        signInRequest.retryAt = Date.now() + signInRetryDelay;
+        setTimeout(syncSignInForm, signInRetryDelay);
+      }
+      syncSignInForm();
     }
     return;
   }
@@ -1604,5 +1657,12 @@ document.querySelector('.skip-link').addEventListener('click', event => {
 });
 window.addEventListener('hashchange', () => navigate());
 navigate(false);
-if (spotlyCloud.configured) connectCloud();
+if (spotlyCloud.configured) {
+  const authResult = new URLSearchParams(location.hash.slice(1));
+  if (authResult.has('error') && authResult.has('error_description')) {
+    history.replaceState(history.state, '', location.pathname + location.search);
+    showToast('Sign-in didn’t finish. Open Sign in to try again.');
+  }
+  connectCloud();
+}
 

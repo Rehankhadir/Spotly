@@ -77,6 +77,21 @@ const spotlyCloud = (() => {
     if (error) throw error;
   }
 
+  async function signInWithGoogle() {
+    const response = await fetch(new URL('/auth/v1/settings', url), { headers: { apikey: publishableKey } });
+    if (!response.ok) throw new Error('Could not check Google sign-in availability.');
+    const settings = await response.json();
+    if (!settings.external?.google) return false;
+
+    const redirect = new URL(location.pathname, location.origin);
+    const { error } = await client.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: redirect.href, queryParams: { prompt: 'select_account' } },
+    });
+    if (error) throw error;
+    return true;
+  }
+
   async function signOut() {
     const { error } = await client.auth.signOut({ scope: 'local' });
     if (error) throw error;
@@ -97,6 +112,6 @@ const spotlyCloud = (() => {
     p_owner_id: owner, p_record_id: id, p_data: data, p_revision: revision,
   });
 
-  return { configured, connect, load, write, importRecords, signIn, signOut,
+  return { configured, connect, load, write, importRecords, signIn, signInWithGoogle, signOut,
     sharedSpots, manageSharing, acceptInvite, editSharedSpot };
 })();
