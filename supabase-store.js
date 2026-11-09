@@ -82,5 +82,21 @@ const spotlyCloud = (() => {
     if (error) throw error;
   }
 
-  return { configured, connect, load, write, importRecords, signIn, signOut };
+  async function collaborationRpc(name, args) {
+    const { data, error } = await client.rpc(name, args);
+    if (error) throw error;
+    return data;
+  }
+
+  const sharedSpots = () => collaborationRpc('spotly_list_shared_spots');
+  const manageSharing = (id, action, memberId = null) => collaborationRpc('spotly_manage_sharing', {
+    p_record_id: id, p_action: action, p_member_id: memberId,
+  });
+  const acceptInvite = token => collaborationRpc('spotly_accept_invite', { p_token: token });
+  const editSharedSpot = (owner, id, data, revision) => collaborationRpc('spotly_update_shared_spot', {
+    p_owner_id: owner, p_record_id: id, p_data: data, p_revision: revision,
+  });
+
+  return { configured, connect, load, write, importRecords, signIn, signOut,
+    sharedSpots, manageSharing, acceptInvite, editSharedSpot };
 })();

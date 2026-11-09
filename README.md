@@ -26,6 +26,12 @@ Push this project to your Git remote and import the repository in Vercel. Select
 
 Each spot, journal entry, and custom category has its own database record. Row Level Security limits records to the account that owns them. Spot and item photos use Spotly's existing compressed image format and are saved with their spot record.
 
+## Collaborate on a spot
+
+Apply `supabase/migrations/20261109010000_spot_collaboration.sql` after the original migration, then deploy the updated site. Sign in, open one of your spots, and choose **Share spot → Create invite link**. Send that link to a friend. They sign in and accept the invitation to see the spot in **My Spots**. The link works once and expires after seven days.
+
+Both people can edit the spot’s details and photos. The owner manages invitations, category, travel status, and favorites. Journals stay private. Use **Refresh spots** in My Spots to pick up edits or access changes. The owner can cancel a pending link or remove a collaborator from the share dialog.
+
 In **Add a spot**, choose a category or select **+ Add a category…** to create one with the spot. For food and drink categories, use **Add another item** for each additional dish or drink. Each item has its own name and optional photo, which appear together in the spot’s details. A spot can also have up to five separate gallery photos. Spotly resizes images before saving them in the current browser. The first gallery image becomes the spot’s cover.
 
 For a **Stay** spot, use **Best places to stay** to add hotels, homestays, or other recommendations. Each recommendation can have its own photo and appears in the spot’s details.

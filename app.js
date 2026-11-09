@@ -7,6 +7,7 @@ const paths = {
   book: '<path d="M4 19V5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1 0-4h13M8 7h7m-7 4h5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4m-6.8 7 6.8 4"/>',
   moon: '<path d="M20.5 14a8.7 8.7 0 0 1-10.6-10.6A8.7 8.7 0 1 0 20.5 14Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5"/>',
   sparkles: '<path d="M10 3l2.1 5.9L18 11l-5.9 2.1L10 19l-2.1-5.9L2 11l5.9-2.1L10 3Zm9 11 1 2.5 2.5 1L20 18.5 19 21l-1-2.5-2.5-1 2.5-1L19 14Zm1-11v4m-2-2h4"/>',
@@ -107,6 +108,8 @@ let spots;
 let customCategories;
 let categories;
 let entries;
+let sharedSpots = new Map();
+let sharedCategories = [];
 
 function applyAtlas(atlas) {
   spots = atlas.spots.map(spot => spot.foodItems ? {
@@ -114,7 +117,7 @@ function applyAtlas(atlas) {
     foodItems: spot.foodItems.map(item => typeof item === 'string' ? { name: item } : item),
   } : spot);
   customCategories = atlas.categories;
-  categories = { ...builtInCategories, ...Object.fromEntries(customCategories) };
+  categories = { ...builtInCategories, ...Object.fromEntries([...customCategories, ...sharedCategories]) };
   entries = atlas.entries;
 }
 
@@ -169,6 +172,10 @@ let cloudState = spotlyCloud.configured ? 'connecting' : 'guest';
 let cloudGeneration = 0;
 let cloudWriting = false;
 let cloudRevisions = new Map();
+let sharingAvailable = false;
+const invitePattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+let pendingInvite = read('spot-invite', '');
+if (!invitePattern.test(pendingInvite)) pendingInvite = '';
 
 function saveLocal(key, data, message) {
   try {
@@ -218,7 +225,7 @@ function badge(status, label = statuses[status][0]) {
 function photo(spot, loading = 'lazy') {
   const upload = spot.photos?.[0];
   if (upload) return `<img src="${esc(upload)}" alt="${esc(spot.name)}, photo 1" loading="${loading}">`;
-  if (spot.alt) return `<img src="./assets/${esc(spot.id)}.webp" alt="${esc(spot.alt)}" loading="${loading}">`;
+  if (spot.alt) return `<img src="./assets/${encodeURIComponent(sharedSpots.get(spot.id)?.record_id ?? spot.id)}.webp" alt="${esc(spot.alt)}" loading="${loading}">`;
   return `<span class="photo-placeholder">${icon(categories[spot.category][1], 37)}</span>`;
 }
 
@@ -258,14 +265,14 @@ function spotCard(spot, index) {
   const [label, graphic] = categories[spot.category];
   return `<article class="spot-card">
     <div class="card-photo">${photo(spot, index < 3 ? 'eager' : 'lazy')}<span class="card-kind">${icon(graphic, 13)}${esc(label)}</span></div>
-    ${favoriteButton(spot, true)}
+    ${sharedSpots.has(spot.id) ? '' : favoriteButton(spot, true)}
     <div class="card-body">
       <h3><button type="button" class="card-open" data-action="detail" data-id="${esc(spot.id)}">${esc(spot.name)}</button></h3>
       <p class="location">${icon('pin', 14)}${esc(spotLocation(spot))}</p>
       ${itemTags('food', spot.foodItems, 2)}
       ${itemTags('stay', spot.stayPlaces, 2)}
       ${itemTags('shopping', spot.shoppingItems, 2)}
-      <div class="card-meta"><span>${spot.status ? badge(spot.status) : ''}</span><span class="card-arrow">${icon('diagonal', 16)}</span></div>
+      <div class="card-meta"><span>${sharedSpots.has(spot.id) ? '<span class="badge tone-lavender">Shared with you</span>' : spot.status ? badge(spot.status) : ''}</span><span class="card-arrow">${icon('diagonal', 16)}</span></div>
     </div>
   </article>`;
 }
@@ -306,7 +313,7 @@ function results() {
   const activeCategory = exploring ? category : collectionCategory;
   const search = searchKey(currentQuery);
   const list = spots.filter(spot =>
-    (exploring || ((spot.status || spot.favorite) && matchesStatus(spot, collectionFilter)))
+    (exploring || ((spot.status || spot.favorite || sharedSpots.has(spot.id)) && matchesStatus(spot, collectionFilter)))
     && (activeCategory === 'all' || spot.category === activeCategory)
     && matchesSearch(spot, search));
   if (exploring && sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
@@ -368,10 +375,11 @@ function intro(graphic, eyebrow, title, copy, actions = '', modifier = '') {
 }
 
 function collectionSummary() {
-  const breakdown = ['want', 'planned', 'visited'].map(id => [id, spots.filter(spot => spot.status === id).length]);
+  const owned = spots.filter(spot => !sharedSpots.has(spot.id));
+  const breakdown = ['want', 'planned', 'visited'].map(id => [id, owned.filter(spot => spot.status === id).length]);
   return `<figure class="atlas-summary"><figcaption>Your travel progress</figcaption>
     <div class="summary-bar" aria-hidden="true">${breakdown.filter(([, count]) => count).map(([id, count]) => `<span class="tone-${statuses[id][2]}" style="flex-grow:${count}"></span>`).join('')}</div>
-    <div class="summary-legend">${breakdown.map(([id, count]) => badge(id, `${statuses[id][0]} · ${count}`)).join('')}${badge('favorite', `Favorites · ${spots.filter(spot => spot.favorite).length}`)}</div></figure>`;
+    <div class="summary-legend">${breakdown.map(([id, count]) => badge(id, `${statuses[id][0]} · ${count}`)).join('')}${badge('favorite', `Favorites · ${owned.filter(spot => spot.favorite).length}`)}</div></figure>`;
 }
 
 function spotsPage() {
@@ -392,7 +400,9 @@ function spotsPage() {
           </select>${icon('chevron', 14)}</div>
         </div>
       </div>
-      <div class="list-tools"><div class="chips" role="group" aria-label="Filter by status">${chips(allStatuses, collectionFilter, 'collection-filter')}</div></div>
+      <div class="list-tools"><div class="chips" role="group" aria-label="Filter by status">${chips(allStatuses, collectionFilter, 'collection-filter')}</div>
+        ${sharingAvailable ? '<button class="btn btn-quiet" data-action="refresh-spots">Refresh spots</button>' : ''}
+      </div>
       <div id="results">${results()}</div>
     </section>`;
 }
@@ -411,9 +421,9 @@ function mapShapes() {
 function mapResults() {
   const list = spots.filter(spot => matchesStatus(spot, mapFilter));
   const selected = list.find(spot => spot.id === mapSelection);
-  const pins = list.filter(spot => spot.point).map(spot => {
+  const pins = list.filter(spot => Array.isArray(spot.point) && spot.point.length === 2 && spot.point.every(Number.isFinite)).map(spot => {
     const tone = statuses[spot.favorite && (mapFilter === 'all' || mapFilter === 'favorite') ? 'favorite' : spot.status]?.[2] ?? 'sky';
-    return `<button class="map-pin tone-${tone}" style="left:${spot.point[0]}%;top:${spot.point[1]}%" data-action="map-pin" data-id="${spot.id}" aria-label="${esc(spot.name)}" title="${esc(spot.name)}" aria-pressed="${selected === spot}">${icon(tone === 'peach' ? 'heart' : 'pin', 18)}</button>`;
+    return `<button class="map-pin tone-${tone}" style="left:${spot.point[0]}%;top:${spot.point[1]}%" data-action="map-pin" data-id="${esc(spot.id)}" aria-label="${esc(spot.name)}" title="${esc(spot.name)}" aria-pressed="${selected === spot}">${icon(tone === 'peach' ? 'heart' : 'pin', 18)}</button>`;
   }).join('');
   const mapList = list.map(spot => `<button class="map-item" data-action="map-select" data-id="${esc(spot.id)}" aria-pressed="${selected === spot}">${photo(spot)}<span><strong>${esc(spot.name)}</strong><span class="location">${esc(spotLocation(spot))}${spot.coordinates ? ' · GPS pin' : spot.point ? '' : ' · No map pin'}</span></span>${icon('arrow', 15)}</button>`).join('');
   return `<div>
@@ -451,11 +461,21 @@ function renderPage() {
         '<button class="btn btn-secondary" data-action="retry-cloud">Try again</button>');
     return;
   }
-  main.innerHTML = { explore: explorePage, spots: spotsPage, map: mapPage, journal: journalPage }[page]();
+  const invitation = pendingInvite
+    ? `<aside class="invite-banner"><div><strong>You’re invited to a shared spot</strong><p>${cloudUser ? 'Accept the invitation to see it in My Spots.' : 'Sign in to accept the invitation.'}</p></div>
+      <button class="btn btn-primary" data-action="review-invite">${cloudUser ? 'Review invitation' : 'Sign in'}</button>
+      <button class="icon-btn" data-action="dismiss-invite" aria-label="Dismiss invitation">${icon('x', 18)}</button></aside>`
+    : '';
+  main.innerHTML = invitation + { explore: explorePage, spots: spotsPage, map: mapPage, journal: journalPage }[page]();
 }
 
 function navigate(focus = true) {
   const hash = location.hash.slice(1);
+  const incomingInvite = new URLSearchParams(hash).get('spotInvite');
+  if (incomingInvite && invitePattern.test(incomingInvite)) {
+    pendingInvite = incomingInvite;
+    try { localStorage.setItem('spotly-spot-invite', JSON.stringify(pendingInvite)); } catch {}
+  }
   page = Object.hasOwn(pages, hash) ? hash : 'explore';
   document.title = page === 'explore' ? 'Spotly — The good places go here' : `${pages[page][0]} — Spotly`;
   renderHeader();
@@ -481,14 +501,57 @@ async function loadCloudAtlas() {
   cloudState = 'loading';
   renderPage();
   try {
-    const records = await spotlyCloud.load(cloudUser.id);
+    const [records, collaborations] = await Promise.all([
+      spotlyCloud.load(cloudUser.id),
+      spotlyCloud.sharedSpots().catch(error => {
+        if (error.code === 'PGRST202') return null;
+        throw error;
+      }),
+    ]);
     if (generation !== cloudGeneration) return;
+    sharingAvailable = collaborations !== null;
+    sharedSpots = new Map();
+    sharedCategories = [];
+    const shared = (collaborations ?? []).map(record => {
+      const id = `shared:${record.user_id}:${record.record_id}`;
+      let categoryId = record.data.category;
+      if (Array.isArray(record.category_choice) && typeof record.category_choice[0] === 'string') {
+        categoryId = `shared:${record.user_id}:${categoryId}`;
+        if (!sharedCategories.some(([key]) => key === categoryId)) {
+          const [label, , , isFood] = record.category_choice;
+          sharedCategories.push([categoryId, [label, isFood ? 'food' : 'pin', isFood ? 'peach' : 'lavender', Boolean(isFood)]]);
+        }
+      } else if (!Object.hasOwn(builtInCategories, categoryId)) {
+        categoryId = 'culture';
+      }
+      sharedSpots.set(id, record);
+      const spot = record.data;
+      const embeddedPhoto = value => typeof value === 'string' && /^data:image\/(?:jpeg|png|webp);base64,/i.test(value);
+      const safeItems = items => Array.isArray(items) ? items.flatMap(item => {
+        if (typeof item === 'string') return [{ name: item }];
+        if (typeof item?.name !== 'string') return [];
+        return [embeddedPhoto(item.photo) ? { name: item.name, photo: item.photo } : { name: item.name }];
+      }) : [];
+      const coordinates = Number.isFinite(spot.coordinates?.latitude) && Number.isFinite(spot.coordinates?.longitude)
+        ? spot.coordinates : undefined;
+      return {
+        ...spot, id, category: categoryId, coordinates,
+        name: typeof spot.name === 'string' ? spot.name : 'Shared spot',
+        location: typeof spot.location === 'string' ? spot.location : '',
+        city: typeof spot.city === 'string' ? spot.city : '',
+        status: Object.hasOwn(statuses, spot.status) && spot.status !== 'favorite' ? spot.status : '',
+        favorite: false,
+        photos: Array.isArray(spot.photos) ? spot.photos.filter(embeddedPhoto) : [],
+        foodItems: safeItems(spot.foodItems), stayPlaces: safeItems(spot.stayPlaces), shoppingItems: safeItems(spot.shoppingItems),
+      };
+    });
     applyAtlas({
-      spots: records.filter(record => record.kind === 'spot').map(record => record.data),
+      spots: [...records.filter(record => record.kind === 'spot').map(record => record.data), ...shared],
       entries: records.filter(record => record.kind === 'entry').map(record => record.data),
       categories: records.filter(record => record.kind === 'category').map(record => [record.record_id, record.data.choice]),
     });
     cloudRevisions = new Map(records.map(record => [`${record.kind}:${record.record_id}`, record.revision]));
+    for (const [id, record] of sharedSpots) cloudRevisions.set(`spot:${id}`, record.revision);
     cloudState = 'ready';
   } catch (error) {
     if (generation !== cloudGeneration) return;
@@ -510,6 +573,9 @@ function changeCloudSession(session) {
   cloudUser = user;
   cloudGeneration += 1;
   cloudRevisions = new Map();
+  sharedSpots = new Map();
+  sharedCategories = [];
+  sharingAvailable = false;
   query = collectionQuery = mapSelection = '';
   category = collectionCategory = collectionFilter = mapFilter = 'all';
   if (dialog.open) dialog.close();
@@ -581,7 +647,10 @@ async function persistCloudRecord(kind, id, data, categoryRecord, errorTarget) {
   cloudWriting = true;
   const key = `${kind}:${id}`;
   try {
-    const revision = await spotlyCloud.write(cloudUser.id, kind, id, data, cloudRevisions.get(key), categoryRecord);
+    const shared = kind === 'spot' && sharedSpots.get(id);
+    const revision = shared
+      ? await spotlyCloud.editSharedSpot(shared.user_id, shared.record_id, { ...data, coordinates: data.coordinates ?? null }, cloudRevisions.get(key))
+      : await spotlyCloud.write(cloudUser.id, kind, id, data, cloudRevisions.get(key), categoryRecord);
     if (generation !== cloudGeneration) return false;
     if (data === null) cloudRevisions.delete(key);
     else cloudRevisions.set(key, revision);
@@ -590,7 +659,9 @@ async function persistCloudRecord(kind, id, data, categoryRecord, errorTarget) {
     if (generation !== cloudGeneration) return false;
     report(error.code === '40001'
       ? 'This record changed on another device. Reload Spotly before editing it again.'
-      : 'Could not save to your account. Check your connection and try again.');
+      : error.code === '42501' && sharedSpots.has(id)
+        ? 'You no longer have access to this spot. Reload My Spots.'
+        : 'Could not save to your account. Check your connection and try again.');
     return false;
   } finally {
     cloudWriting = false;
@@ -621,6 +692,93 @@ async function importLocalAtlas(button) {
   }
 }
 
+function clearInvite() {
+  pendingInvite = '';
+  try { localStorage.removeItem('spotly-spot-invite'); } catch {}
+  if (new URLSearchParams(location.hash.slice(1)).has('spotInvite')) {
+    const url = new URL(location.href);
+    url.hash = '';
+    history.replaceState(history.state, '', url);
+  }
+}
+
+function reviewInvite() {
+  if (!cloudUser) {
+    if (cloudState === 'connecting') showToast('Spotly is connecting. Try again in a moment.');
+    else accountDialog();
+    return;
+  }
+  showDialog(`<h2 id="dialog-title">Join a shared spot</h2>
+    <p>Accept to see and edit this spot with your friend. You’ll find it in My Spots.</p>
+    <p id="invite-status" class="form-message" role="status"></p>
+    <div class="detail-actions"><button class="btn btn-primary" data-action="accept-invite">Accept invitation</button></div>`);
+}
+
+async function joinSpot(button) {
+  if (!pendingInvite || !cloudUser || cloudState !== 'ready' || cloudWriting) return;
+  const generation = cloudGeneration;
+  const status = dialog.querySelector('#invite-status');
+  button.disabled = true;
+  cloudWriting = true;
+  try {
+    await spotlyCloud.acceptInvite(pendingInvite);
+    if (generation !== cloudGeneration) return;
+    clearInvite();
+    query = collectionQuery = '';
+    collectionCategory = collectionFilter = 'all';
+    if (dialog.contains(button)) dialog.close();
+    location.hash = '#spots';
+    await loadCloudAtlas();
+    if (generation === cloudGeneration && cloudState === 'ready') showToast('Shared spot added to My Spots');
+  } catch (error) {
+    if (generation === cloudGeneration) {
+      status.textContent = error.code === '22023'
+        ? 'This invitation can’t be used. Ask the spot owner for a new link.'
+        : 'Could not accept the invitation. Try again.';
+    }
+  } finally {
+    cloudWriting = false;
+    button.disabled = false;
+  }
+}
+
+function sharingDialog(spot, { invite, members }) {
+  const id = esc(spot.id);
+  const link = new URL(location.pathname, location.origin);
+  if (invite) link.hash = new URLSearchParams({ spotInvite: invite.token }).toString();
+  showDialog(`<h2 id="dialog-title">Share spot</h2><p>${esc(spot.name)}</p>
+    <p>Invite a friend to see and edit this spot. Each link can be used once and expires after seven days.</p>
+    <p id="sharing-status" class="form-message" role="status"></p>
+    ${invite ? `<div class="dialog-form">
+      <label class="field">Invitation link<input id="sharing-link" type="url" readonly value="${esc(link.href)}"></label>
+      <div class="detail-actions"><button class="btn btn-primary" data-action="copy-invite">Copy link</button>
+        <button class="btn btn-quiet" data-action="cancel-invite" data-id="${id}">Cancel link</button></div>
+    </div>` : `<div class="detail-actions"><button class="btn btn-primary" data-action="create-invite" data-id="${id}">Create invite link</button></div>`}
+    ${members.length ? `<section class="sharing-members" aria-label="Collaborators"><h3>Collaborators</h3><ul>${members.map(member => `<li>
+      <span>${esc(member.email ?? 'Collaborator')}</span>
+      <button class="btn btn-quiet btn-danger" data-action="remove-collaborator" data-id="${id}" data-member="${esc(member.id)}" aria-label="Remove ${esc(member.email ?? 'collaborator')}">Remove</button>
+    </li>`).join('')}</ul></section>` : ''}`);
+}
+
+async function manageSpotSharing(button, action) {
+  if (!sharingAvailable || cloudState !== 'ready') return;
+  const spot = spots.find(item => item.id === button.dataset.id);
+  if (!spot || sharedSpots.has(spot.id)) return;
+  if (action === 'status') {
+    showDialog('<h2 id="dialog-title">Share spot</h2><p id="sharing-status" role="status">Loading sharing settings…</p>');
+  }
+  const status = dialog.querySelector('#sharing-status');
+  button.disabled = true;
+  try {
+    const result = await spotlyCloud.manageSharing(spot.id, action, button.dataset.member);
+    if (dialog.open && dialog.contains(status)) sharingDialog(spot, result);
+  } catch {
+    if (dialog.open && dialog.contains(status)) status.textContent = 'Could not update sharing. Try again.';
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function options(choices, selected, exclude) {
   return Object.entries(choices).filter(([id]) => id !== exclude).map(([id, [label]]) =>
     `<option value="${esc(id)}"${id === selected ? ' selected' : ''}>${esc(label)}</option>`
@@ -646,22 +804,25 @@ function itemDetails(kind, items = []) {
 function detail(spot) {
   const [label, graphic] = categories[spot.category];
   const photos = spot.photos ?? [];
+  const shared = sharedSpots.has(spot.id);
   showDialog(`<div class="detail-photo">${photo(spot, 'eager')}</div>
     ${photos.length > 1 ? `<div class="photo-gallery" role="group" aria-label="Spot photos">${photos.map((src, index) =>
       `<button type="button" class="photo-thumb" data-action="show-photo" data-id="${esc(spot.id)}" data-index="${index}" aria-pressed="${index === 0}" aria-label="Show photo ${index + 1}"><img src="${esc(src)}" alt=""></button>`
     ).join('')}</div>` : ''}
     <span class="eyebrow">${icon(graphic, 16)} ${esc(label)}</span>
     <h2 id="dialog-title">${esc(spot.name)}</h2>
+    ${shared ? '<p><span class="badge tone-lavender">Shared with you</span></p>' : ''}
     <div class="location">${icon('pin', 16)} ${esc(spotLocation(spot))}</div>
     ${spot.description ? `<p>${esc(spot.description)}</p>` : ''}
     ${itemDetails('food', spot.foodItems)}
     ${itemDetails('stay', spot.stayPlaces)}
     ${itemDetails('shopping', spot.shoppingItems)}
     <div class="card-meta" id="detail-status"${spot.status ? '' : ' hidden'}>${spot.status ? badge(spot.status) : ''}</div>
-    <div class="dialog-form"><label class="field">Travel status<select id="detail-status-select" data-id="${esc(spot.id)}">${statusOptions(spot.status)}</select></label></div>
-    <div class="detail-actions">${locationLink(spot)}${favoriteButton(spot)}
+    ${shared ? '' : `<div class="dialog-form"><label class="field">Travel status<select id="detail-status-select" data-id="${esc(spot.id)}">${statusOptions(spot.status)}</select></label></div>`}
+    <div class="detail-actions">${locationLink(spot)}${shared ? '' : favoriteButton(spot)}
       <button class="btn btn-secondary" data-action="entry" data-spot="${esc(spot.id)}">${icon('book', 17)} Write a note</button>
-      ${spot.custom ? `<button class="btn btn-quiet" data-action="add" data-id="${esc(spot.id)}">${icon('pencil', 16)} Edit spot</button>` : ''}
+      ${spot.custom || shared ? `<button class="btn btn-quiet" data-action="add" data-id="${esc(spot.id)}">${icon('pencil', 16)} Edit spot</button>` : ''}
+      ${sharingAvailable && !shared ? `<button class="btn btn-primary" data-action="share-spot" data-id="${esc(spot.id)}">${icon('share', 16)} Share spot</button>` : ''}
     </div>`);
 }
 
@@ -702,6 +863,8 @@ function spotItemsEditor(kind, items, enabled) {
 
 function spotForm(spot) {
   const selectedCategory = spot?.category ?? 'cafe';
+  const shared = sharedSpots.has(spot?.id);
+  const editableCategories = { ...builtInCategories, ...Object.fromEntries(customCategories) };
   showDialog(`<form class="spot-form" id="spot-form" data-id="${esc(spot?.id)}">
     <header class="spot-form-header">
       <span class="eyebrow">${icon('pin', 16)} Your atlas</span>
@@ -721,8 +884,10 @@ function spotForm(spot) {
         <p id="location-coordinates" class="form-message"></p>
         <p id="location-status" class="form-message" role="status"></p>
       </div>
-      <div class="form-row"><label class="field">Category<select name="category">${options(categories, selectedCategory, 'all')}<option value="new">+ Add a category…</option></select></label>
-      <label class="field">Travel status<select name="status">${statusOptions(spot?.status ?? 'want')}</select></label></div>
+      <div class="form-row"><label class="field">Category<select name="category"${shared ? ' disabled' : ''}>
+        ${shared ? `<option value="${esc(selectedCategory)}">${esc(categories[selectedCategory][0])}</option>` : `${options(editableCategories, selectedCategory, 'all')}<option value="new">+ Add a category…</option>`}
+      </select></label>
+      <label class="field">Travel status<select name="status"${shared ? ' disabled' : ''}>${statusOptions(spot?.status ?? 'want')}</select></label></div>
       <div class="category-editor" id="category-editor" hidden>
         <label class="field">New category name<input name="categoryName" maxlength="36" placeholder="e.g. Tiffin centre" disabled></label>
         <label class="field-check"><input type="checkbox" name="categoryFood" disabled> This is a food or drink category</label>
@@ -1011,6 +1176,44 @@ async function onAction(event) {
   const { action, id, spot: spotId } = button.dataset;
 
   switch (action) {
+    case 'review-invite':
+      reviewInvite();
+      break;
+    case 'dismiss-invite':
+      clearInvite();
+      renderPage();
+      break;
+    case 'accept-invite':
+      await joinSpot(button);
+      break;
+    case 'share-spot':
+      await manageSpotSharing(button, 'status');
+      break;
+    case 'create-invite':
+      await manageSpotSharing(button, 'create');
+      break;
+    case 'cancel-invite':
+      await manageSpotSharing(button, 'cancel');
+      break;
+    case 'remove-collaborator':
+      await manageSpotSharing(button, 'remove');
+      break;
+    case 'copy-invite': {
+      const link = dialog.querySelector('#sharing-link');
+      const status = dialog.querySelector('#sharing-status');
+      try {
+        await navigator.clipboard.writeText(link.value);
+        status.textContent = 'Invite link copied.';
+      } catch {
+        link.focus();
+        link.select();
+        status.textContent = 'Copy the selected invitation link to share it.';
+      }
+      break;
+    }
+    case 'refresh-spots':
+      if (!cloudWriting) await loadCloudAtlas();
+      break;
     case 'account':
       accountDialog();
       break;
@@ -1194,11 +1397,12 @@ async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
     return false;
   }
   const existing = spots.find(spot => spot.id === form.dataset.id);
-  let categoryId = data.category;
+  const shared = sharedSpots.has(existing?.id);
+  let categoryId = shared ? existing.category : data.category;
   let nextCategories = customCategories;
   if (categoryId === 'new') {
     const name = data.categoryName.trim().replace(/\s+/g, ' ');
-    if (Object.values(categories).some(([label]) => searchKey(label) === searchKey(name))) {
+    if ([...Object.values(builtInCategories), ...customCategories.map(([, choice]) => choice)].some(([label]) => searchKey(label) === searchKey(name))) {
       form.elements.categoryName.setCustomValidity('This category already exists. Select it from the list.');
       form.elements.categoryName.reportValidity();
       return false;
@@ -1217,7 +1421,7 @@ async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
     coordinates: locationDrafts.get(form),
     description: data.description.trim(),
     category: categoryId,
-    status: data.status,
+    status: shared ? existing.status : data.status,
     foodItems,
     stayPlaces,
     shoppingItems,
@@ -1228,7 +1432,7 @@ async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
   if (cloudUser) {
     const categoryRecord = nextCategories === customCategories ? null : nextCategories.at(-1);
     if (!await persistCloudRecord('spot', spot.id, spot, categoryRecord, form.querySelector('#spot-error'))) return false;
-    message = 'Spot saved to your account';
+    message = shared ? 'Shared spot updated' : 'Spot saved to your account';
   } else {
     try {
       localStorage.setItem('spotly-spots', JSON.stringify({ spots: nextSpots, categories: nextCategories }));
@@ -1249,7 +1453,7 @@ async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
   }
   spots = nextSpots;
   customCategories = nextCategories;
-  categories = { ...builtInCategories, ...Object.fromEntries(customCategories) };
+  categories = { ...builtInCategories, ...Object.fromEntries([...customCategories, ...sharedCategories]) };
   if (!existing) {
     query = '';
     category = 'all';
