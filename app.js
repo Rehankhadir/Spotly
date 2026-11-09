@@ -6,6 +6,7 @@ const paths = {
   map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15m6-12v15"/>',
   book: '<path d="M4 19V5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1 0-4h13M8 7h7m-7 4h5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>',
   moon: '<path d="M20.5 14a8.7 8.7 0 0 1-10.6-10.6A8.7 8.7 0 1 0 20.5 14Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.4 1.4m11.2 11.2L19 19M5 19l1.4-1.4M17.6 6.4 19 5"/>',
   sparkles: '<path d="M10 3l2.1 5.9L18 11l-5.9 2.1L10 19l-2.1-5.9L2 11l5.9-2.1L10 3Zm9 11 1 2.5 2.5 1L20 18.5 19 21l-1-2.5-2.5-1 2.5-1L19 14Zm1-11v4m-2-2h4"/>',
@@ -92,16 +93,32 @@ function read(key, fallback) {
   }
 }
 
-const savedAtlas = read('spots', sampleSpots);
-const savedSpots = Array.isArray(savedAtlas) ? savedAtlas : savedAtlas.spots ?? sampleSpots;
-let spots = savedSpots.map(spot => spot.foodItems ? {
-  ...spot,
-  foodItems: spot.foodItems.map(item => typeof item === 'string' ? { name: item } : item),
-} : spot);
-let customCategories = Array.isArray(savedAtlas.categories) ? savedAtlas.categories : [];
-let categories = { ...builtInCategories, ...Object.fromEntries(customCategories) };
-let entries = read('entries', sampleEntries);
-if (!Array.isArray(entries)) entries = sampleEntries;
+function localAtlas() {
+  const stored = read('spots', sampleSpots);
+  const journal = read('entries', sampleEntries);
+  return {
+    spots: Array.isArray(stored) ? stored : stored.spots ?? sampleSpots,
+    categories: Array.isArray(stored.categories) ? stored.categories : [],
+    entries: Array.isArray(journal) ? journal : sampleEntries,
+  };
+}
+
+let spots;
+let customCategories;
+let categories;
+let entries;
+
+function applyAtlas(atlas) {
+  spots = atlas.spots.map(spot => spot.foodItems ? {
+    ...spot,
+    foodItems: spot.foodItems.map(item => typeof item === 'string' ? { name: item } : item),
+  } : spot);
+  customCategories = atlas.categories;
+  categories = { ...builtInCategories, ...Object.fromEntries(customCategories) };
+  entries = atlas.entries;
+}
+
+applyAtlas(localAtlas());
 const photoDrafts = new WeakMap();
 const locationDrafts = new WeakMap();
 const maxPhotos = 5;
@@ -147,14 +164,19 @@ let query = '';
 let sort = 'featured';
 let dialogOpener;
 let toastTimer;
+let cloudUser = null;
+let cloudState = spotlyCloud.configured ? 'connecting' : 'guest';
+let cloudGeneration = 0;
+let cloudWriting = false;
+let cloudRevisions = new Map();
 
-function save(key, data, message) {
+function saveLocal(key, data, message) {
   try {
     localStorage.setItem(`spotly-${key}`, JSON.stringify(data));
   } catch {
     message = 'Saved for this visit. Browser storage is unavailable.';
   }
-  showToast(message);
+  return message;
 }
 
 function showToast(message) {
@@ -181,7 +203,11 @@ function renderHeader() {
   navigation.innerHTML = Object.entries(pages).map(([id, [label, graphic]]) =>
     `${id === 'map' ? addTab : ''}<a href="#${id}" class="nav-link"${page === id ? ' aria-current="page"' : ''}><span class="nav-icon">${icon(graphic, 17)}</span><span>${label}</span></a>`
   ).join('');
-  headerActions.innerHTML = `${themeButton()}<button class="btn btn-primary" data-action="add">${icon('plus', 17)} Add a spot</button>`;
+  const accountLabel = cloudUser ? 'Your account' : 'Sign in';
+  const accountButton = spotlyCloud.configured
+    ? `<button class="icon-btn account-button" data-action="account" aria-label="${accountLabel}" title="${accountLabel}" aria-haspopup="dialog"${cloudState === 'connecting' ? ' disabled' : ''}>${icon('user', 18)}</button>`
+    : '';
+  headerActions.innerHTML = `${themeButton()}${accountButton}<button class="btn btn-primary header-add" data-action="add" aria-label="Add a spot">${icon('plus', 17)} <span>Add a spot</span></button>`;
 }
 
 function badge(status, label = statuses[status][0]) {
@@ -316,7 +342,9 @@ function explorePage() {
       </form>
     </div>
     <div class="hero-photo"><img src="./assets/positano.webp" alt="Sunlit Positano villas above the turquoise Amalfi Coast" fetchpriority="high"></div>
-    <button class="hero-caption" data-action="detail" data-id="positano">${icon('pin', 19)}<span><small>Postcard from</small><strong>Positano, Italy</strong></span>${icon('diagonal', 14)}</button>
+    ${spots.some(spot => spot.id === 'positano')
+      ? `<button class="hero-caption" data-action="detail" data-id="positano">${icon('pin', 19)}<span><small>Postcard from</small><strong>Positano, Italy</strong></span>${icon('diagonal', 14)}</button>`
+      : `<div class="hero-caption">${icon('pin', 19)}<span><small>Postcard from</small><strong>Positano, Italy</strong></span></div>`}
   </section>
   <section class="spot-section" id="discover" aria-labelledby="discover-title">
     <div class="section-head"><div><span class="eyebrow">Wander a little</span><h2 id="discover-title" tabindex="-1">Find your next favorite</h2><p>A few good places to get you going.</p></div>
@@ -415,6 +443,13 @@ function journalPage() {
 }
 
 function renderPage() {
+  if (cloudUser && cloudState !== 'ready') {
+    main.innerHTML = cloudState === 'loading'
+      ? '<p role="status">Loading your Spotly account…</p>'
+      : emptyState('user', 'Could not load your account', 'Try again to get your saved places and journal.',
+        '<button class="btn btn-secondary" data-action="retry-cloud">Try again</button>');
+    return;
+  }
   main.innerHTML = { explore: explorePage, spots: spotsPage, map: mapPage, journal: journalPage }[page]();
 }
 
@@ -438,6 +473,151 @@ function showDialog(markup) {
   dialog.innerHTML = `<div class="dialog-inner"><button type="button" class="icon-btn" data-action="close" aria-label="Close dialog">${icon('x', 20)}</button>${markup}</div>`;
   if (!dialog.open) dialog.showModal();
   (dialog.querySelector('input') || dialog.querySelector('[data-action="close"]')).focus();
+}
+
+async function loadCloudAtlas() {
+  const generation = cloudGeneration;
+  cloudState = 'loading';
+  renderPage();
+  try {
+    const records = await spotlyCloud.load(cloudUser.id);
+    if (generation !== cloudGeneration) return;
+    applyAtlas({
+      spots: records.filter(record => record.kind === 'spot').map(record => record.data),
+      entries: records.filter(record => record.kind === 'entry').map(record => record.data),
+      categories: records.filter(record => record.kind === 'category').map(record => [record.record_id, record.data.choice]),
+    });
+    cloudRevisions = new Map(records.map(record => [`${record.kind}:${record.record_id}`, record.revision]));
+    cloudState = 'ready';
+  } catch (error) {
+    if (generation !== cloudGeneration) return;
+    console.warn('Spotly could not load account data.', error.code ?? error.name);
+    cloudState = 'load-error';
+  }
+  renderPage();
+}
+
+function changeCloudSession(session) {
+  const user = session?.user ?? null;
+  if (user?.id === cloudUser?.id) {
+    if (cloudState === 'connecting') {
+      cloudState = 'guest';
+      renderHeader();
+    }
+    return;
+  }
+  cloudUser = user;
+  cloudGeneration += 1;
+  cloudRevisions = new Map();
+  query = collectionQuery = mapSelection = '';
+  category = collectionCategory = collectionFilter = mapFilter = 'all';
+  if (dialog.open) dialog.close();
+  if (user) {
+    cloudState = 'loading';
+    applyAtlas({ spots: [], entries: [], categories: [] });
+    loadCloudAtlas();
+  } else {
+    cloudState = 'guest';
+    applyAtlas(localAtlas());
+    renderPage();
+  }
+  renderHeader();
+}
+
+async function connectCloud() {
+  cloudState = 'connecting';
+  renderHeader();
+  try {
+    await spotlyCloud.connect(changeCloudSession);
+  } catch {
+    cloudState = 'connection-error';
+    renderHeader();
+    showToast('Could not connect to Supabase. Open your account to retry.');
+  }
+}
+
+function accountDialog() {
+  const heading = `<span class="eyebrow">${icon('user', 16)} Spotly account</span>`;
+  if (cloudState === 'connection-error') {
+    showDialog(`${heading}<h2 id="dialog-title">Connection unavailable</h2>
+      <p>Try connecting again to sign in.</p>
+      <div class="detail-actions"><button class="btn btn-primary" data-action="retry-cloud">Reconnect</button></div>`);
+    return;
+  }
+  if (!cloudUser) {
+    showDialog(`${heading}<h2 id="dialog-title">Sign in to Spotly</h2>
+      <p>Use an email link to open your saved spots and journal on any device.</p>
+      <form class="dialog-form" id="account-form">
+        <label class="field">Email address<input name="email" type="email" autocomplete="email" required></label>
+        <p class="form-message" id="account-status" role="status"></p>
+        ${formActions('Send sign-in link')}
+      </form>`);
+    return;
+  }
+  const hasLocalData = read('spots', null) || read('entries', null);
+  showDialog(`${heading}<h2 id="dialog-title">Your account</h2>
+    <p>Signed in as ${esc(cloudUser.email ?? 'Spotly user')}.</p>
+    ${hasLocalData ? '<p>Import copies the atlas and journal from this browser. If a record already exists in your account, it keeps its saved values.</p>' : ''}
+    <p class="form-message" id="account-status" role="status"></p>
+    <div class="detail-actions">
+      ${cloudState === 'ready' && hasLocalData ? '<button class="btn btn-primary" data-action="import-atlas">Import browser data</button>' : ''}
+      ${cloudState === 'load-error' ? '<button class="btn btn-secondary" data-action="retry-cloud">Reload account</button>' : ''}
+      <button class="btn btn-quiet" data-action="sign-out">Sign out</button>
+    </div>`);
+}
+
+async function persistCloudRecord(kind, id, data, categoryRecord, errorTarget) {
+  if (!cloudUser) return true;
+  const generation = cloudGeneration;
+  const report = message => {
+    if (errorTarget?.isConnected) errorTarget.textContent = message;
+    else showToast(message);
+  };
+  if (cloudState !== 'ready' || cloudWriting) {
+    report('Wait for your account to finish syncing, then try again.');
+    return false;
+  }
+  cloudWriting = true;
+  const key = `${kind}:${id}`;
+  try {
+    const revision = await spotlyCloud.write(cloudUser.id, kind, id, data, cloudRevisions.get(key), categoryRecord);
+    if (generation !== cloudGeneration) return false;
+    if (data === null) cloudRevisions.delete(key);
+    else cloudRevisions.set(key, revision);
+    return true;
+  } catch (error) {
+    if (generation !== cloudGeneration) return false;
+    report(error.code === '40001'
+      ? 'This record changed on another device. Reload Spotly before editing it again.'
+      : 'Could not save to your account. Check your connection and try again.');
+    return false;
+  } finally {
+    cloudWriting = false;
+  }
+}
+
+async function importLocalAtlas(button) {
+  if (cloudState !== 'ready' || cloudWriting) return;
+  const generation = cloudGeneration;
+  const status = dialog.querySelector('#account-status');
+  button.disabled = true;
+  cloudWriting = true;
+  status.textContent = 'Copying browser data…';
+  try {
+    await spotlyCloud.importRecords(cloudUser.id, localAtlas());
+    if (generation !== cloudGeneration) return;
+    await loadCloudAtlas();
+    if (generation === cloudGeneration) {
+      status.textContent = cloudState === 'ready'
+        ? 'Browser data imported into your account.'
+        : 'Browser data copied. Reload your account to view it.';
+    }
+  } catch {
+    if (generation === cloudGeneration) status.textContent = 'Could not import browser data. Try again.';
+  } finally {
+    cloudWriting = false;
+    button.disabled = false;
+  }
 }
 
 function options(choices, selected, exclude) {
@@ -780,12 +960,14 @@ function entryForm(entry, spotId) {
       <div class="form-row"><label class="field">Date<input name="date" type="date" required min="1900-01-01" max="9999-12-31" value="${esc(entry?.date ?? localDate())}"></label>
       <label class="field">Spot<select name="spotId"><option value="">No linked spot</option>${spots.map(spot => `<option value="${esc(spot.id)}"${(entry?.spotId ?? spotId) === spot.id ? ' selected' : ''}>${esc(spot.name)}</option>`).join('')}</select></label></div>
       <label class="field">Your story<textarea name="body" required maxlength="4000" placeholder="What do you want to remember?">${esc(entry?.body)}</textarea></label>
+      <p id="journal-error" class="form-message" role="alert"></p>
       ${formActions('Save entry', entry ? '<button type="button" class="btn btn-quiet btn-danger" data-action="delete-entry">Delete entry</button>' : '')}
     </form>`);
 }
 
 function confirmDelete(entry) {
   showDialog(`<h2 id="dialog-title">Delete this entry?</h2><p>“${esc(entry.title)}” will be removed from your journal.</p>
+    <p id="journal-error" class="form-message" role="alert"></p>
     <div class="dialog-actions"><button class="btn btn-quiet" data-action="entry" data-id="${esc(entry.id)}">Keep entry</button>
     <button class="btn btn-quiet btn-danger" data-action="confirm-delete" data-id="${esc(entry.id)}">Delete entry</button></div>`);
 }
@@ -811,20 +993,45 @@ function refreshMap() {
   if (area) area.innerHTML = mapResults();
 }
 
-function updateSpot(spot, message) {
+async function updateSpot(spot, message) {
+  if (!await persistCloudRecord('spot', spot.id, spot)) return false;
   spots = spots.map(current => current.id === spot.id ? spot : current);
-  save('spots', { spots, categories: customCategories }, message);
+  if (!cloudUser) message = saveLocal('spots', { spots, categories: customCategories }, message);
   if (page === 'spots') main.querySelector('.atlas-summary').outerHTML = collectionSummary();
   refreshResults();
   refreshMap();
+  showToast(message);
+  return true;
 }
 
-function onAction(event) {
+async function onAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button) return;
   const { action, id, spot: spotId } = button.dataset;
 
   switch (action) {
+    case 'account':
+      accountDialog();
+      break;
+    case 'retry-cloud':
+      if (dialog.open) dialog.close();
+      if (cloudUser) await loadCloudAtlas();
+      else await connectCloud();
+      break;
+    case 'import-atlas':
+      await importLocalAtlas(button);
+      break;
+    case 'sign-out':
+      button.disabled = true;
+      try {
+        await spotlyCloud.signOut();
+      } catch {
+        if (button.isConnected) {
+          dialog.querySelector('#account-status').textContent = 'Could not sign out. Try again.';
+          button.disabled = false;
+        }
+      }
+      break;
     case 'theme': {
       const dark = document.documentElement.dataset.theme !== 'dark';
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -903,12 +1110,16 @@ function onAction(event) {
     case 'favorite': {
       const spot = spots.find(spot => spot.id === id);
       const updated = { ...spot, favorite: !spot.favorite };
-      updateSpot(updated, updated.favorite ? 'Added to Favorites' : 'Removed from Favorites');
-      if (dialog.open) button.setAttribute('aria-pressed', updated.favorite);
-      else (findButton(action, id) || findButton('collection-filter', collectionFilter) || main).focus({ preventScroll: true });
+      if (!await updateSpot(updated, updated.favorite ? 'Added to Favorites' : 'Removed from Favorites')) break;
+      if (dialog.contains(button)) button.setAttribute('aria-pressed', updated.favorite);
+      else if (!dialog.open) (findButton(action, id) || findButton('collection-filter', collectionFilter) || main).focus({ preventScroll: true });
       break;
     }
     case 'add':
+      if (cloudUser && cloudState !== 'ready') {
+        showToast('Load your account before adding a spot.');
+        break;
+      }
       spotForm(spots.find(spot => spot.id === id));
       break;
     case 'capture-location':
@@ -955,19 +1166,23 @@ function onAction(event) {
     case 'delete-entry':
       confirmDelete(entries.find(entry => entry.id === document.querySelector('#entry-form').dataset.id));
       break;
-    case 'confirm-delete':
+    case 'confirm-delete': {
+      const status = dialog.querySelector('#journal-error');
+      if (!await persistCloudRecord('entry', id, null, null, status)) break;
       entries = entries.filter(entry => entry.id !== id);
-      save('entries', entries, 'Journal entry deleted');
+      const message = cloudUser ? 'Journal entry deleted' : saveLocal('entries', entries, 'Journal entry deleted');
+      showToast(message);
       if (page === 'journal') renderPage();
-      dialog.close();
+      if (button.isConnected && dialog.open) dialog.close();
       break;
+    }
     case 'close':
       dialog.close();
       break;
   }
 }
 
-function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
+async function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
   const existing = spots.find(spot => spot.id === form.dataset.id);
   let categoryId = data.category;
   let nextCategories = customCategories;
@@ -979,12 +1194,12 @@ function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
       return false;
     }
     const isFood = Boolean(data.categoryFood);
-    categoryId = `category-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    categoryId = form.dataset.newCategoryId ||= `category-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     nextCategories = [...customCategories, [categoryId, [name, isFood ? 'food' : 'pin', isFood ? 'peach' : 'lavender', isFood]]];
   }
   const spot = {
     ...existing,
-    id: existing?.id ?? `spot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: existing?.id ?? (form.dataset.newId ||= `spot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
     custom: true,
     name: data.name.trim(),
     city: data.city.trim(),
@@ -1000,21 +1215,26 @@ function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
   };
   const nextSpots = existing ? spots.map(current => current.id === spot.id ? spot : current) : [spot, ...spots];
   let message = existing ? 'Spot updated' : 'Spot added to your atlas';
-  try {
-    localStorage.setItem('spotly-spots', JSON.stringify({ spots: nextSpots, categories: nextCategories }));
-  } catch (error) {
-    const hasPhotos = spot.photos.length || [...foodItems, ...stayPlaces, ...shoppingItems].some(item => item.photo);
-    if (spot.coordinates || hasPhotos) {
-      let storageError = 'Browser storage is unavailable. Enable site storage and try again.';
-      if (error.name === 'QuotaExceededError') {
-        storageError = hasPhotos
-          ? 'Browser storage is full. Remove some photos and try saving again.'
-          : 'Browser storage is full. Free up space and try saving again.';
+  if (cloudUser) {
+    const categoryRecord = nextCategories === customCategories ? null : nextCategories.at(-1);
+    if (!await persistCloudRecord('spot', spot.id, spot, categoryRecord, form.querySelector('#spot-error'))) return false;
+  } else {
+    try {
+      localStorage.setItem('spotly-spots', JSON.stringify({ spots: nextSpots, categories: nextCategories }));
+    } catch (error) {
+      const hasPhotos = spot.photos.length || [...foodItems, ...stayPlaces, ...shoppingItems].some(item => item.photo);
+      if (spot.coordinates || hasPhotos) {
+        let storageError = 'Browser storage is unavailable. Enable site storage and try again.';
+        if (error.name === 'QuotaExceededError') {
+          storageError = hasPhotos
+            ? 'Browser storage is full. Remove some photos and try saving again.'
+            : 'Browser storage is full. Free up space and try saving again.';
+        }
+        form.querySelector('#spot-error').textContent = storageError;
+        return false;
       }
-      form.querySelector('#spot-error').textContent = storageError;
-      return false;
+      message = 'Saved for this visit. Browser storage is unavailable.';
     }
-    message = 'Saved for this visit. Browser storage is unavailable.';
   }
   spots = nextSpots;
   customCategories = nextCategories;
@@ -1036,11 +1256,27 @@ function saveSpot(form, data, { foodItems, stayPlaces, shoppingItems }) {
   return true;
 }
 
-function onSubmit(event) {
+async function onSubmit(event) {
   const form = event.target;
-  if (!['search-form', 'spot-form', 'entry-form'].includes(form.id)) return;
+  if (!['search-form', 'spot-form', 'entry-form', 'account-form'].includes(form.id)) return;
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
+  if (form.id === 'account-form') {
+    const status = form.querySelector('#account-status');
+    const button = form.querySelector('[type="submit"]');
+    if (button.disabled) return;
+    button.disabled = true;
+    status.textContent = 'Sending sign-in link…';
+    try {
+      await spotlyCloud.signIn(data.email.trim());
+      status.textContent = 'Check your email for a sign-in link.';
+    } catch {
+      status.textContent = 'Could not send a sign-in link. Check your email address and try again.';
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
   if (form.id === 'search-form') {
     query = data.query.trim();
     category = 'all';
@@ -1066,15 +1302,19 @@ function onSubmit(event) {
     const stayPlaces = readSpotItems(form.querySelector('#stay-field'));
     if (!stayPlaces) return;
     const shoppingItems = readSpotItems(form.querySelector('#shopping-field'));
-    if (!shoppingItems || !saveSpot(form, data, { foodItems, stayPlaces, shoppingItems })) return;
+    if (!shoppingItems || !await saveSpot(form, data, { foodItems, stayPlaces, shoppingItems })) return;
   } else {
     const existing = entries.find(entry => entry.id === form.dataset.id);
-    const entry = { ...data, id: existing?.id ?? `entry-${Date.now()}`, title: data.title.trim(), body: data.body.trim() };
+    const id = existing?.id ?? (form.dataset.newId ||= `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const entry = { ...data, id, title: data.title.trim(), body: data.body.trim() };
+    if (!await persistCloudRecord('entry', entry.id, entry, null, form.querySelector('#journal-error'))) return;
     entries = existing ? entries.map(current => current.id === entry.id ? entry : current) : [entry, ...entries];
-    save('entries', entries, existing ? 'Journal entry updated' : 'Journal entry saved');
+    let message = existing ? 'Journal entry updated' : 'Journal entry saved';
+    if (!cloudUser) message = saveLocal('entries', entries, message);
+    showToast(message);
     if (page === 'journal') renderPage();
   }
-  dialog.close();
+  if (form.isConnected && dialog.open) dialog.close();
 }
 
 document.addEventListener('click', onAction);
@@ -1096,7 +1336,7 @@ document.addEventListener('input', event => {
     }
   }
 });
-document.addEventListener('change', event => {
+document.addEventListener('change', async event => {
   const field = event.target;
   if (field.form?.id === 'spot-form') {
     if (field.name === 'category' || field.name === 'categoryFood') updateCategoryFields(field.form);
@@ -1114,7 +1354,12 @@ document.addEventListener('change', event => {
   if (event.target.id === 'detail-status-select') {
     const spot = spots.find(current => current.id === event.target.dataset.id);
     const status = event.target.value;
-    updateSpot({ ...spot, status }, 'Travel status updated');
+    const saved = await updateSpot({ ...spot, status }, 'Travel status updated');
+    if (!field.isConnected) return;
+    if (!saved) {
+      field.value = spots.find(current => current.id === spot.id)?.status ?? '';
+      return;
+    }
     const indicator = dialog.querySelector('#detail-status');
     indicator.innerHTML = status ? badge(status) : '';
     indicator.hidden = !status;
@@ -1138,4 +1383,5 @@ document.querySelector('.skip-link').addEventListener('click', event => {
 });
 window.addEventListener('hashchange', () => navigate());
 navigate(false);
+if (spotlyCloud.configured) connectCloud();
 

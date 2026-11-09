@@ -288,7 +288,7 @@ dialog::backdrop { background: #061e2cb5; backdrop-filter: blur(4px); }
 .photo-remove { position: absolute; top: 0; right: 0; width: 25px; height: 25px; border-radius: 7px; }
 .dialog-inner .form-message { margin: 0; font-size: 12px; }
 .dialog-inner .form-message:empty { display: none; }
-.dialog-inner #spot-error { color: var(--error-ink); }
+.dialog-inner #spot-error, .dialog-inner #journal-error { color: var(--error-ink); }
 .btn:disabled, .field input:disabled { cursor: wait; opacity: .65; transform: none; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
 .dialog-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; margin-top: 5px; }
@@ -401,6 +401,8 @@ dialog:has(.spot-form) { overflow: hidden; }
   .collection-tools { grid-template-columns: 1fr; }
   .shell, .header-inner { width: calc(100% - 28px); }
   .header-actions { gap: 6px; }
+  .header-actions:has(.account-button) .header-add { width: 43px; padding-inline: 0; }
+  .header-actions:has(.account-button) .header-add span { display: none; }
   .card-grid, .journal-grid { grid-template-columns: 1fr; }
   .section-head .btn { min-height: 36px; padding: 6px 8px; }
   .section-head .btn svg { width: 15px; height: 15px; }
