@@ -1,0 +1,41 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#F5FCFB">
+  <meta name="description" content="Find your next favorite place and keep every little adventure in one personal travel atlas.">
+  <title>Spotly — The good places go here</title>
+  <link rel="icon" href="./assets/spotly.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <script>
+    try {
+      if (localStorage.getItem('spotly-theme') === 'dark') document.documentElement.dataset.theme = 'dark';
+    } catch {}
+  </script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="#explore" class="wordmark" aria-label="Spotly home"><img src="./assets/spotly.svg" alt="" width="37" height="37"><span>spotly<span class="wordmark-dot">.</span></span></a>
+      <nav aria-label="Main navigation" class="main-nav" id="navigation"></nav>
+      <div class="header-actions" id="header-actions"></div>
+    </div>
+  </header>
+  <main id="main" class="shell" tabindex="-1"></main>
+  <footer class="site-footer">
+    <div class="shell footer-inner">
+      <a href="#explore" class="wordmark"><img src="./assets/spotly.svg" alt="" width="30" height="30"><span>spotly<span class="wordmark-dot">.</span></span></a>
+      <p>A little more adventure, every day.</p>
+      <span>Your personal travel atlas</span>
+    </div>
+  </footer>
+  <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+  <div class="toast" role="status" id="toast"></div>
+</body>
+</html>
